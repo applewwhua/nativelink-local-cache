@@ -1,0 +1,39 @@
+[Unit]
+Description=NativeLink CAS / Action Cache (Bazel remote cache)
+Documentation=https://docs.nativelink.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nativelink
+Group=nativelink
+
+# 配置文件路径由部署脚本写入；config 错误时进程会立即非零退出
+ExecStart=/usr/local/bin/nativelink /etc/nativelink/cas.json5
+
+Restart=on-failure
+RestartSec=3
+
+# C++ 大规模并行构建需要，配合 /etc/security/limits.d/99-nativelink.conf
+LimitNOFILE=524288
+
+# 目录权限
+RuntimeDirectory=nativelink
+StateDirectory=nativelink
+
+# 日志：NL_LOG=json 便于接入采集；RUST_LOG 控制详细程度（warn/info/debug）
+Environment=NL_LOG=json
+Environment=RUST_LOG=info
+# 可选：OTLP 遥测。必须带 host 和 port，否则 client 会 panic
+# Environment=NL_OTEL_ENDPOINT=http://otel-collector.internal:4317
+
+# 安全加固（按需裁剪；注意 musl 静态二进制不需要任何动态库）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/nativelink
+
+[Install]
+WantedBy=multi-user.target

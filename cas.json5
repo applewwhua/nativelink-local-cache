@@ -1,0 +1,106 @@
+// NativeLink —— 纯远程缓存（Cache-only）最小生产可用配置
+// 版本基线：NativeLink v1.8.3 · Ubuntu 20.04/22.04/24.04 · x86_64 / aarch64
+//
+// 说明：
+//   * 本配置只有 stores + servers，没有 schedulers / workers，
+//     因此它只做「缓存」，不提供远程执行（capabilities 会告诉客户端 RE 不可用）。
+//     这是最安全、最容易上手的形态。
+//   * 注意：仓库自带的 nativelink-config/examples/basic_cas.json5 在 v1.8.3 里
+//     其实是「all-in-one」（内含 worker + scheduler + execution 服务），
+//     不是纯缓存配置；本文件按纯缓存场景精简重写。
+//   * 配置解析使用 serde(deny_unknown_fields)：写错字段名会直接启动失败，
+//     不会静默降级 —— 所以「进程活着」就等于「配置被完整接受」。
+{
+  global: {
+    // 二进制默认是 24576，C++ 大规模并行构建必踩。
+    // 注意：二进制只会用到系统实际上限的 80%，所以 /etc/security/limits.d 也要一起调。
+    max_open_files: 524288,
+  },
+
+  stores: [
+    {
+      // ── CAS：真正存字节的地方（编译产物 / .o / 头文件快照 …）────────────
+      name: "CAS_MAIN_STORE",
+      compression: {
+        compression_algorithm: { lz4: {} },   // CPU 换磁盘，几乎总是划算
+        backend: {
+          filesystem: {
+            content_path: "/var/lib/nativelink/cas/content",
+            temp_path: "/var/lib/nativelink/cas/tmp",
+            eviction_policy: {
+              // 100GB。按「工作集」而不是「总产物量」来定：
+              // 超了只是命中率下降，不会构建失败。
+              max_bytes: 100000000000,
+            },
+          },
+        },
+      },
+    },
+    {
+      // ── AC：只存 action 结果元数据（谁跑过、输出 digest 是什么）────────
+      // 相比 CAS 小两个数量级，丢了大不了重算，500MB 起步即可。
+      name: "AC_MAIN_STORE",
+      filesystem: {
+        content_path: "/var/lib/nativelink/ac/content",
+        temp_path: "/var/lib/nativelink/ac/tmp",
+        eviction_policy: {
+          max_bytes: 500000000,
+        },
+      },
+    },
+  ],
+
+  servers: [
+    {
+      name: "public",
+      listener: {
+        http: {
+          // 0.0.0.0 = 允许局域网其他机器访问（这才是缓存共享的意义）。
+          // 若只本机自用，改成 127.0.0.1:50051。
+          socket_address: "0.0.0.0:50051",
+          // 需要 TLS/mTLS 时解开下面注释（证书自签或内网 CA）：
+          // tls: {
+          //   cert_file: "/etc/nativelink/tls/server.crt",
+          //   key_file:  "/etc/nativelink/tls/server.key",
+          //   // client_ca_file: "/etc/nativelink/tls/clients-ca.crt",  // 开启即 mTLS
+          // },
+        },
+      },
+      services: {
+        // 同时注册 "" 和 "main" 两个 instance_name：
+        // 客户端设 --remote_instance_name=main 或不设都能用。
+        // 两边 instance_name 不一致 = 「写入成功但永远读不命中」的头号故障。
+        cas: [
+          { instance_name: "", cas_store: "CAS_MAIN_STORE" },
+          { instance_name: "main", cas_store: "CAS_MAIN_STORE" },
+        ],
+        ac: [
+          { instance_name: "", ac_store: "AC_MAIN_STORE" },
+          { instance_name: "main", ac_store: "AC_MAIN_STORE" },
+        ],
+        bytestream: [
+          { instance_name: "", cas_store: "CAS_MAIN_STORE" },
+          { instance_name: "main", cas_store: "CAS_MAIN_STORE" },
+        ],
+        capabilities: [
+          // remote_execution 故意不配 → 客户端看到「不支持远程执行」，
+          // 因此不会误把 action 派过来。
+          // remote_cache_compression 打开后，才支持 Bazel 的
+          // --remote_cache_compression（zstd 线压缩）。
+          { instance_name: "", remote_cache_compression: true },
+          { instance_name: "main", remote_cache_compression: true },
+        ],
+      },
+    },
+
+    // 可选：仅本机可达的健康检查端口（不影响构建客户端）
+    // {
+    //   name: "local_admin",
+    //   listener: { http: { socket_address: "127.0.0.1:50062" } },
+    //   services: {
+    //     health: {},
+    //     admin: {},
+    //   },
+    // },
+  ],
+}

@@ -1,0 +1,35 @@
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+
+package(default_visibility = ["//visibility:public"])
+
+# 在本机安装 NativeLink 缓存服务（Bazel remote cache）：
+#
+#   bazel run //tools/nativelink:install
+#
+# 入口就是本目录的 install-nativelink.sh；cas.json5（服务配置）与
+# nativelink-cas.service（systemd unit）作为 data 与它同目录带入构建树，
+# 脚本据此定位配置与 unit。
+#
+# 安装会写 /usr/local/bin、/etc/nativelink 与 /etc/systemd/system，两种提权
+# 方式都可以（脚本自身处理了 sudo 丢环境变量的问题，配置与 unit 仍能找到）：
+#
+#   # 1) 脚本自动 sudo：只提权安装脚本，Bazel server 仍是当前用户
+#   bazel run //tools/nativelink:install
+#
+#   # 2) 由 Bazel 的 run_under 包一层 sudo：整条命令都在 root 下执行
+#   bazel run --run_under='sudo --preserve-env=PATH' //tools/nativelink:install
+#
+# 参数原样透传，例如离线安装：
+#
+#   bazel run //tools/nativelink:install -- \
+#       --tarball ./nativelink-1.8.3-x86_64-unknown-linux-musl.tar.gz
+#
+# 只看用法（不写系统）：bazel run //tools/nativelink:install -- --help
+sh_binary(
+    name = "install",
+    srcs = ["install-nativelink.sh"],
+    data = [
+        "cas.json5",
+        "nativelink-cas.service",
+    ],
+)
